@@ -1,0 +1,196 @@
+@import "tailwindcss";
+
+
+:root {
+  --background: #090b0a;
+  --foreground: #f5f4ef;
+
+  --panel: rgba(22, 25, 22, 0.72);
+  --panel-strong: rgba(27, 31, 27, 0.92);
+
+  --border: rgba(255, 255, 255, 0.08);
+  --muted: #969b94;
+
+  --accent: #d6a65d;
+  --accent-soft: #efc984;
+  --green: #77b98a;
+}
+
+
+* {
+  box-sizing: border-box;
+}
+
+
+html {
+  scroll-behavior: smooth;
+}
+
+
+body {
+  margin: 0;
+  min-height: 100vh;
+
+  background:
+    radial-gradient(
+      circle at 15% 10%,
+      rgba(89, 113, 75, 0.12),
+      transparent 32%
+    ),
+    radial-gradient(
+      circle at 85% 20%,
+      rgba(180, 125, 65, 0.12),
+      transparent 34%
+    ),
+    #090b0a;
+
+  color: var(--foreground);
+
+  font-family:
+    Arial,
+    Helvetica,
+    sans-serif;
+}
+
+
+::selection {
+  background: rgba(214, 166, 93, 0.35);
+}
+
+
+.glass-panel {
+  background: var(--panel);
+
+  border:
+    1px solid var(--border);
+
+  backdrop-filter:
+    blur(22px);
+
+  -webkit-backdrop-filter:
+    blur(22px);
+
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.25);
+}
+
+
+.soft-border {
+  border:
+    1px solid var(--border);
+}
+
+
+.studio-grid {
+  background-image:
+    linear-gradient(
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px
+    );
+
+  background-size:
+    42px 42px;
+}
+
+
+.gold-text {
+  background:
+    linear-gradient(
+      110deg,
+      #f1d59d,
+      #c9924c
+    );
+
+  -webkit-background-clip:
+    text;
+
+  background-clip:
+    text;
+
+  color: transparent;
+}
+
+
+.generate-button {
+  background:
+    linear-gradient(
+      120deg,
+      #dfb76d,
+      #b77a35
+    );
+
+  color: #17120b;
+
+  box-shadow:
+    0 15px 35px
+    rgba(190, 130, 55, 0.18);
+
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    filter 180ms ease;
+}
+
+
+.generate-button:hover {
+  transform:
+    translateY(-2px);
+
+  filter:
+    brightness(1.06);
+
+  box-shadow:
+    0 20px 45px
+    rgba(190, 130, 55, 0.26);
+}
+
+
+.wave-bar {
+  transform-origin:
+    bottom;
+
+  animation:
+    wave 1.2s ease-in-out infinite;
+}
+
+
+@keyframes wave {
+  0%,
+  100% {
+    transform:
+      scaleY(0.35);
+  }
+
+  50% {
+    transform:
+      scaleY(1);
+  }
+}
+
+
+.fade-in {
+  animation:
+    fadeIn 420ms ease both;
+}
+
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+
+    transform:
+      translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+}
