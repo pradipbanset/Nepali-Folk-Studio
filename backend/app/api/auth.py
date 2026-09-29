@@ -2,11 +2,21 @@
 # AUTH API ROUTES
 # ============================================================
 
+import os
+
 from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
     status,
+)
+
+from google.auth.transport import (
+    requests as google_requests,
+)
+
+from google.oauth2 import (
+    id_token,
 )
 
 from sqlalchemy import (
@@ -19,6 +29,10 @@ from sqlalchemy.exc import (
 
 from sqlalchemy.orm import (
     Session,
+)
+
+from dotenv import (
+    load_dotenv,
 )
 
 
@@ -41,11 +55,25 @@ from app.models.user import (
 )
 
 from app.schemas.auth import (
+    GoogleAuthRequest,
     LoginRequest,
     RegisterRequest,
     TokenResponse,
     UserResponse,
 )
+
+
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
+load_dotenv()
+
+
+GOOGLE_CLIENT_ID = os.getenv(
+    "GOOGLE_CLIENT_ID",
+    "",
+).strip()
 
 
 # ============================================================
@@ -74,10 +102,6 @@ def register_user(
     ),
 ):
 
-    # --------------------------------------------------------
-    # NORMALISE INPUT
-    # --------------------------------------------------------
-
     email = (
         str(request.email)
         .strip()
@@ -89,10 +113,6 @@ def register_user(
         .strip()
     )
 
-
-    # --------------------------------------------------------
-    # CHECK EXISTING EMAIL
-    # --------------------------------------------------------
 
     existing_user = db.scalar(
 
@@ -117,20 +137,12 @@ def register_user(
         )
 
 
-    # --------------------------------------------------------
-    # HASH PASSWORD
-    # --------------------------------------------------------
-
     hashed_password = (
         hash_password(
             request.password
         )
     )
 
-
-    # --------------------------------------------------------
-    # CREATE USER
-    # --------------------------------------------------------
 
     user = User(
 
@@ -175,10 +187,6 @@ def register_user(
     )
 
 
-    # --------------------------------------------------------
-    # RETURN SAFE USER DATA
-    # --------------------------------------------------------
-
     return user
 
 
@@ -197,20 +205,12 @@ def login_user(
     ),
 ):
 
-    # --------------------------------------------------------
-    # NORMALISE EMAIL
-    # --------------------------------------------------------
-
     email = (
         str(request.email)
         .strip()
         .lower()
     )
 
-
-    # --------------------------------------------------------
-    # FIND USER
-    # --------------------------------------------------------
 
     user = db.scalar(
 
@@ -219,10 +219,6 @@ def login_user(
         )
     )
 
-
-    # --------------------------------------------------------
-    # INVALID EMAIL
-    # --------------------------------------------------------
 
     if user is None:
 
@@ -242,10 +238,6 @@ def login_user(
             },
         )
 
-
-    # --------------------------------------------------------
-    # VERIFY PASSWORD
-    # --------------------------------------------------------
 
     password_valid = (
         verify_password(
@@ -274,8 +266,350 @@ def login_user(
         )
 
 
+    access_token = (
+        create_access_token(
+            user.id
+        )
+    )
+
+
+    return TokenResponse(
+
+        access_token=(
+            access_token
+        ),
+
+        token_type="bearer",
+    )
+
+
+# ============================================================
+# GOOGLE LOGIN
+# ============================================================
+
+@router.post(
+    "/google",
+    response_model=TokenResponse,
+)
+def google_login(
+    request: GoogleAuthRequest,
+    db: Session = Depends(
+        get_db
+    ),
+):
+
     # --------------------------------------------------------
-    # CREATE JWT ACCESS TOKEN
+    # CHECK SERVER CONFIGURATION
+    # --------------------------------------------------------
+
+    if not GOOGLE_CLIENT_ID:
+
+        raise HTTPException(
+
+            status_code=(
+                status.HTTP_500_INTERNAL_SERVER_ERROR
+            ),
+
+            detail=(
+                "Google authentication "
+                "is not configured."
+            ),
+        )
+
+
+    # --------------------------------------------------------
+    # VERIFY GOOGLE ID TOKEN
+    # --------------------------------------------------------
+
+    try:
+
+        google_user = (
+            id_token.verify_oauth2_token(
+
+                request.credential,
+
+                google_requests.Request(),
+
+                GOOGLE_CLIENT_ID,
+            )
+        )
+
+    except ValueError:
+
+        raise HTTPException(
+
+            status_code=(
+                status.HTTP_401_UNAUTHORIZED
+            ),
+
+            detail=(
+                "Invalid Google "
+                "authentication token."
+            ),
+        )
+
+
+    # --------------------------------------------------------
+    # EXTRACT GOOGLE USER DETAILS
+    # --------------------------------------------------------
+
+    google_sub = str(
+        google_user.get(
+            "sub",
+            "",
+        )
+    ).strip()
+
+
+    email = str(
+        google_user.get(
+            "email",
+            "",
+        )
+    ).strip().lower()
+
+
+    email_verified = bool(
+        google_user.get(
+            "email_verified",
+            False,
+        )
+    )
+
+
+    name = str(
+        google_user.get(
+            "name",
+            "",
+        )
+    ).strip()
+
+
+    hosted_domain = str(
+        google_user.get(
+            "hd",
+            "",
+        )
+    ).strip()
+
+
+    # --------------------------------------------------------
+    # VALIDATE REQUIRED CLAIMS
+    # --------------------------------------------------------
+
+    if (
+        not google_sub
+        or not email
+        or not email_verified
+    ):
+
+        raise HTTPException(
+
+            status_code=(
+                status.HTTP_401_UNAUTHORIZED
+            ),
+
+            detail=(
+                "Google account could "
+                "not be verified."
+            ),
+        )
+
+
+    if not name:
+
+        name = (
+            email
+            .split("@")[0]
+        )
+
+
+    name = name[:100]
+
+
+    # --------------------------------------------------------
+    # FIRST LOOK UP BY GOOGLE ACCOUNT ID
+    # --------------------------------------------------------
+
+    user = db.scalar(
+
+        select(User).where(
+            User.google_sub == google_sub
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # EXISTING GOOGLE USER
+    # --------------------------------------------------------
+
+    if user is not None:
+
+        access_token = (
+            create_access_token(
+                user.id
+            )
+        )
+
+        return TokenResponse(
+
+            access_token=(
+                access_token
+            ),
+
+            token_type="bearer",
+        )
+
+
+    # --------------------------------------------------------
+    # CHECK WHETHER EMAIL ALREADY EXISTS
+    # --------------------------------------------------------
+
+    existing_user = db.scalar(
+
+        select(User).where(
+            User.email == email
+        )
+    )
+
+
+    if existing_user is not None:
+
+        # Google is authoritative for Gmail accounts
+        # and verified Google Workspace domains.
+
+        google_authoritative = (
+
+            email.endswith(
+                "@gmail.com"
+            )
+
+            or (
+
+                email_verified
+
+                and bool(
+                    hosted_domain
+                )
+            )
+        )
+
+
+        if not google_authoritative:
+
+            raise HTTPException(
+
+                status_code=(
+                    status.HTTP_409_CONFLICT
+                ),
+
+                detail=(
+                    "An account already exists "
+                    "with this email. Sign in "
+                    "with your password first."
+                ),
+            )
+
+
+        existing_user.google_sub = (
+            google_sub
+        )
+
+
+        try:
+
+            db.commit()
+
+        except IntegrityError:
+
+            db.rollback()
+
+            raise HTTPException(
+
+                status_code=(
+                    status.HTTP_409_CONFLICT
+                ),
+
+                detail=(
+                    "This Google account is "
+                    "already linked."
+                ),
+            )
+
+
+        db.refresh(
+            existing_user
+        )
+
+
+        access_token = (
+            create_access_token(
+                existing_user.id
+            )
+        )
+
+
+        return TokenResponse(
+
+            access_token=(
+                access_token
+            ),
+
+            token_type="bearer",
+        )
+
+
+    # --------------------------------------------------------
+    # CREATE NEW GOOGLE USER
+    # --------------------------------------------------------
+
+    user = User(
+
+        name=name,
+
+        email=email,
+
+        password_hash=None,
+
+        google_sub=(
+            google_sub
+        ),
+    )
+
+
+    db.add(
+        user
+    )
+
+
+    try:
+
+        db.commit()
+
+    except IntegrityError:
+
+        db.rollback()
+
+        raise HTTPException(
+
+            status_code=(
+                status.HTTP_409_CONFLICT
+            ),
+
+            detail=(
+                "Unable to create "
+                "Google account."
+            ),
+        )
+
+
+    db.refresh(
+        user
+    )
+
+
+    # --------------------------------------------------------
+    # ISSUE OUR NORMAL APPLICATION JWT
     # --------------------------------------------------------
 
     access_token = (
@@ -284,10 +618,6 @@ def login_user(
         )
     )
 
-
-    # --------------------------------------------------------
-    # RETURN TOKEN
-    # --------------------------------------------------------
 
     return TokenResponse(
 

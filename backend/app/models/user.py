@@ -39,9 +39,19 @@ class User(Base):
         nullable=False,
     )
 
-    password_hash: Mapped[str] = mapped_column(
+    # Local email/password users will have this.
+    # Google-only users may not have a password.
+    password_hash: Mapped[str | None] = mapped_column(
         String(255),
-        nullable=False,
+        nullable=True,
+    )
+
+    # Stable Google account identifier from the ID token "sub" claim.
+    google_sub: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

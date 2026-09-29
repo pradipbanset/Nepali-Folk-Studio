@@ -62,8 +62,12 @@ def hash_password(
 
 def verify_password(
     plain_password: str,
-    hashed_password: str,
+    hashed_password: str | None,
 ) -> bool:
+
+    if not hashed_password:
+
+        return False
 
     return password_hash.verify(
         plain_password,

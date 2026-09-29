@@ -7,6 +7,11 @@ import {
   type ReactNode,
 } from "react";
 
+import {
+  GoogleLogin,
+  type CredentialResponse,
+} from "@react-oauth/google";
+
 
 type HealthResponse = {
   status: string;
@@ -294,20 +299,55 @@ const MOTION_CSS = String.raw`
     background:
       radial-gradient(
         560px circle at var(--folk-pointer-x) var(--folk-pointer-y),
-        rgba(245, 197, 95, 0.065),
+        rgba(202, 149, 62, 0.085),
         transparent 66%
       ),
       radial-gradient(
-        620px circle at 12% 22%,
-        rgba(16, 185, 129, 0.04),
-        transparent 64%
+        760px circle at 14% 24%,
+        rgba(128, 38, 34, 0.07),
+        transparent 62%
+      ),
+      radial-gradient(
+        640px circle at 84% 18%,
+        rgba(39, 86, 59, 0.055),
+        transparent 62%
       );
-    opacity: 0.95;
+    opacity: 0.96;
     transition: opacity 300ms ease;
   }
 
+  .folk-ambient::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.16;
+    background-image:
+      linear-gradient(rgba(201, 161, 95, 0.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(201, 161, 95, 0.045) 1px, transparent 1px),
+      repeating-linear-gradient(
+        45deg,
+        transparent 0 18px,
+        rgba(144, 47, 43, 0.06) 18px 20px,
+        transparent 20px 38px
+      ),
+      repeating-linear-gradient(
+        -45deg,
+        transparent 0 18px,
+        rgba(92, 63, 27, 0.05) 18px 20px,
+        transparent 20px 38px
+      );
+    background-size: 64px 64px, 64px 64px, 180px 180px, 180px 180px;
+    mask-image: linear-gradient(
+      180deg,
+      rgba(0,0,0,0.85),
+      rgba(0,0,0,0.45) 58%,
+      rgba(0,0,0,0.18)
+    );
+  }
+
   .folk-ambient > * {
-    position: relative;
     z-index: 1;
   }
 
@@ -849,6 +889,46 @@ export default function Home() {
 
 
   // ============================================================
+  // AUTH PANEL SCROLL RESET
+  // ============================================================
+
+  useEffect(() => {
+    if (!showAuthPanel) {
+      return;
+    }
+
+    // Remove any landing-page anchor such as #models so the
+    // browser does not preserve that old scroll position when
+    // the auth view replaces the landing page.
+    const cleanUrl =
+      `${window.location.pathname}${window.location.search}`;
+
+    window.history.replaceState(
+      null,
+      "",
+      cleanUrl
+    );
+
+    const frame = requestAnimationFrame(() => {
+      window.scrollTo({
+        top: 0,
+        left: 0,
+        behavior: "auto",
+      });
+
+      // Extra safeguard for browsers that preserve document
+      // scroll state across conditional React renders.
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    });
+
+    return () => {
+      cancelAnimationFrame(frame);
+    };
+  }, [showAuthPanel]);
+
+
+  // ============================================================
   // VISUAL MOTION / SCROLL REVEAL
   // ============================================================
 
@@ -1065,6 +1145,44 @@ export default function Home() {
   // AUTH HELPERS
   // ============================================================
 
+  async function completeAuthSession(
+    token: string,
+  ) {
+    const meResponse = await fetch(
+      `${API_URL}/api/auth/me`,
+      {
+        headers: {
+          Authorization:
+            `Bearer ${token}`,
+        },
+      }
+    );
+
+    const meData =
+      await meResponse.json();
+
+    if (!meResponse.ok) {
+      throw new Error(
+        meData.detail ??
+          "Unable to load your account."
+      );
+    }
+
+    window.localStorage.setItem(
+      "nepali_folk_access_token",
+      token
+    );
+
+    setAccessToken(token);
+    setCurrentUser(meData);
+    setAuthPassword("");
+    setAuthNotice("");
+    setShowAuthPanel(false);
+
+    await fetchMySongs(token);
+  }
+
+
   async function loginWithCredentials(
     email: string,
     password: string,
@@ -1097,37 +1215,70 @@ export default function Home() {
     const token =
       loginData.access_token as string;
 
-    const meResponse = await fetch(
-      `${API_URL}/api/auth/me`,
-      {
-        headers: {
-          Authorization:
-            `Bearer ${token}`,
-        },
-      }
-    );
-
-    const meData =
-      await meResponse.json();
-
-    if (!meResponse.ok) {
-      throw new Error(
-        meData.detail ??
-          "Unable to load your account."
-      );
-    }
-
-    window.localStorage.setItem(
-      "nepali_folk_access_token",
+    await completeAuthSession(
       token
     );
+  }
 
-    setAccessToken(token);
-    setCurrentUser(meData);
-    setAuthPassword("");
+
+  async function handleGoogleSuccess(
+    response: CredentialResponse,
+  ) {
+    const credential =
+      response.credential;
+
+    if (!credential) {
+      setAuthNotice(
+        "Google did not return an authentication credential."
+      );
+      return;
+    }
+
+    setIsAuthenticating(true);
     setAuthNotice("");
 
-    await fetchMySongs(token);
+    try {
+      const googleResponse = await fetch(
+        `${API_URL}/api/auth/google`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify({
+            credential,
+          }),
+        }
+      );
+
+      const googleData =
+        await googleResponse.json();
+
+      if (!googleResponse.ok) {
+        throw new Error(
+          googleData.detail ??
+            "Google sign-in failed."
+        );
+      }
+
+      const token =
+        googleData.access_token as string;
+
+      await completeAuthSession(
+        token
+      );
+
+    } catch (error) {
+      setAuthNotice(
+        error instanceof Error
+          ? error.message
+          : "Unable to sign in with Google."
+      );
+
+    } finally {
+      setIsAuthenticating(false);
+    }
   }
 
 
@@ -2015,7 +2166,7 @@ export default function Home() {
     playerTarget?.kind ===
     "generated"
       ? theme.trim() ||
-        "New Nepali folk song"
+        "Studio preview"
       : playerSong
         ? songTitle(playerSong)
         : "";
@@ -2098,10 +2249,11 @@ export default function Home() {
             studio-grid
             relative
             min-h-screen
-            overflow-hidden
+            overflow-x-hidden
             px-5
-            py-8
+            py-6
             sm:px-8
+            lg:py-8
           "
         >
           <style>{MOTION_CSS}</style>
@@ -2173,22 +2325,29 @@ export default function Home() {
               z-10
               mx-auto
               grid
-              min-h-[calc(100vh-4rem)]
+              w-full
               max-w-6xl
-              items-center
               gap-10
+              pt-16
+              pb-8
+              sm:pt-20
               lg:grid-cols-[1.05fr_0.75fr]
+              lg:items-start
+              lg:gap-14
+              lg:pt-16
+              lg:pb-10
             "
           >
             <section
               className="
                 hidden
                 lg:block
+                lg:pt-2
               "
             >
               <div
                 className="
-                  mb-8
+                  mb-6
                   flex
                   items-center
                   gap-3
@@ -2252,7 +2411,7 @@ export default function Home() {
   
               <p
                 className="
-                  mt-6
+                  mt-5
                   max-w-xl
                   text-base
                   leading-8
@@ -2264,7 +2423,7 @@ export default function Home() {
   
               <div
                 className="
-                  mt-10
+                  mt-8
                   grid
                   max-w-xl
                   grid-cols-3
@@ -2327,15 +2486,16 @@ export default function Home() {
                 folk-lift
                 mx-auto
                 w-full
-                max-w-md
-                rounded-[30px]
+                max-w-[420px]
+                rounded-[28px]
                 p-6
-                sm:p-8
+                sm:p-7
+                lg:mt-0
               "
             >
               <div
                 className="
-                  mb-7
+                  mb-6
                   flex
                   items-center
                   gap-3
@@ -2409,7 +2569,7 @@ export default function Home() {
   
               <div
                 className="
-                  mt-7
+                  mt-5
                   grid
                   grid-cols-2
                   rounded-xl
@@ -2466,8 +2626,8 @@ export default function Home() {
   
               <div
                 className="
-                  mt-6
-                  space-y-4
+                  mt-5
+                  space-y-3.5
                 "
               >
                 {authMode === "register" && (
@@ -2653,6 +2813,83 @@ export default function Home() {
                       ? "Enter Studio →"
                       : "Create Account →"}
                 </button>
+
+                <div
+                  className="
+                    flex
+                    items-center
+                    gap-3
+                    py-1
+                  "
+                >
+                  <div
+                    className="
+                      h-px
+                      flex-1
+                      bg-white/8
+                    "
+                  />
+                  <span
+                    className="
+                      text-[11px]
+                      uppercase
+                      tracking-[0.16em]
+                      text-neutral-600
+                    "
+                  >
+                    or
+                  </span>
+                  <div
+                    className="
+                      h-px
+                      flex-1
+                      bg-white/8
+                    "
+                  />
+                </div>
+
+                <div
+                  className={`
+                    flex
+                    w-full
+                    justify-center
+                    overflow-hidden
+                    rounded-xl
+                    ${
+                      isAuthenticating
+                        ? "pointer-events-none opacity-50"
+                        : ""
+                    }
+                  `}
+                >
+                  <GoogleLogin
+                    onSuccess={
+                      handleGoogleSuccess
+                    }
+                    onError={() => {
+                      setAuthNotice(
+                        "Google sign-in was cancelled or failed."
+                      );
+                    }}
+                    theme="filled_black"
+                    size="large"
+                    shape="rectangular"
+                    text="continue_with"
+                    logo_alignment="left"
+                    width="360"
+                  />
+                </div>
+
+                <p
+                  className="
+                    text-center
+                    text-[11px]
+                    leading-5
+                    text-neutral-600
+                  "
+                >
+                  Continue securely with your Google account.
+                </p>
               </div>
             </section>
           </div>
@@ -2755,7 +2992,7 @@ export default function Home() {
                     sm:block
                   "
                 >
-                  AI-powered Nepali folk music
+                  लोक संगीत प्रयोगशाला · AI folk creation
                 </span>
               </span>
             </button>
@@ -2951,13 +3188,25 @@ export default function Home() {
                     bg-emerald-400
                   "
                 />
-                नेपाली लोक संगीत • AI
+                आफ्नो कथा • आफ्नै लोकधुन
               </div>
+
+              <p
+                className="
+                  mt-6
+                  text-sm
+                  tracking-[0.14em]
+                  text-amber-100/70
+                  sm:text-base
+                "
+              >
+                आफ्नै कथा, आफ्नै लोकधुन।
+              </p>
 
               <h1
                 className="
                   folk-hero-title
-                  mt-7
+                  mt-5
                   max-w-3xl
                   text-5xl
                   font-semibold
@@ -2976,7 +3225,7 @@ export default function Home() {
                     block
                   "
                 >
-                  Nepali folk music.
+                  living Nepali folk music.
                 </span>
               </h1>
 
@@ -2986,15 +3235,16 @@ export default function Home() {
                   max-w-xl
                   text-base
                   leading-7
-                  text-neutral-400
+                  text-neutral-300
                   sm:text-lg
                 "
               >
-                Describe an idea, create original
-                Nepali lyrics, choose traditional
-                instruments and vocals, then generate
-                a complete folk song with your
-                fine-tuned AI models.
+                Start from a memory, a village path,
+                a love story, a season or a place.
+                Create Nepali lyrics, shape them with
+                folk instruments and vocals, then turn
+                them into an original lok geet through
+                your fine-tuned AI pipeline.
               </p>
 
               <div
@@ -3026,7 +3276,7 @@ export default function Home() {
                     font-semibold
                   "
                 >
-                  ✦ Create your first song
+                  ✦ Create your first lok geet
                 </button>
 
                 <a
@@ -3050,7 +3300,7 @@ export default function Home() {
                     hover:text-white
                   "
                 >
-                  See how it works
+                  Explore the process
                   <span>↓</span>
                 </a>
               </div>
@@ -3127,7 +3377,7 @@ export default function Home() {
                       }
                     `}
                   />
-                  AI generation
+                  Music engine
                   <span className="text-neutral-300">
                     {gpuOnline
                       ? "Ready"
@@ -3189,7 +3439,7 @@ export default function Home() {
                         uppercase
                       "
                     >
-                      Create
+                      लोक रचना
                     </p>
                     <p
                       className="
@@ -3199,7 +3449,7 @@ export default function Home() {
                         text-white
                       "
                     >
-                      New Nepali folk song
+                      Studio preview
                     </p>
                   </div>
 
@@ -3215,7 +3465,7 @@ export default function Home() {
                       text-emerald-300
                     "
                   >
-                    AI Studio
+                    लोक धुन
                   </div>
                 </div>
 
@@ -3235,7 +3485,7 @@ export default function Home() {
                       text-neutral-600
                     "
                   >
-                    What should your song be about?
+                    कथाको बीउ · Story seed
                   </p>
 
                   <p
@@ -3246,10 +3496,11 @@ export default function Home() {
                       text-neutral-200
                     "
                   >
-                    A young man returns to his
-                    mountain village after many
-                    years and remembers the people,
-                    paths and songs of his childhood.
+                    After many years away, a young
+                    man returns to his hill village
+                    and rediscovers the people,
+                    footpaths and melodies that once
+                    shaped his childhood.
                   </p>
                 </div>
 
@@ -3262,22 +3513,22 @@ export default function Home() {
                   "
                 >
                   <PreviewControl
-                    label="Mood"
-                    value="Nostalgic"
+                    label="Mood · भाव"
+                    value="सम्झना · Nostalgic"
                   />
 
                   <PreviewControl
-                    label="Vocals"
-                    value="Male + Female"
+                    label="Vocals · स्वर"
+                    value="युगल · Male + Female"
                   />
 
                   <PreviewControl
-                    label="Instruments"
+                    label="Instruments · बाजा"
                     value="Madal · Sarangi · Bansuri"
                   />
 
                   <PreviewControl
-                    label="Length"
+                    label="Length · अवधि"
                     value="1:30"
                   />
                 </div>
@@ -3310,7 +3561,7 @@ export default function Home() {
                           uppercase
                         "
                       >
-                        Generated track
+                        लोक धुन झलक
                       </p>
 
                       <p
@@ -3396,11 +3647,11 @@ export default function Home() {
                     "
                   >
                     <span>
-                      Gemma lyrics
+                      Gemma lyrics engine
                     </span>
                     <span>•</span>
                     <span>
-                      ACE-Step music
+                      ACE-Step folk audio
                     </span>
                     <span>•</span>
                     <span>
@@ -3436,27 +3687,27 @@ export default function Home() {
             "
           >
             <LandingStat
-              eyebrow="Lyrics"
-              title="Original Nepali words"
-              description="Generate and edit lyrics before music creation."
+              eyebrow="Lyric craft"
+              title="Original Nepali lines"
+              description="Draft, review and refine lyrics before you create the final song."
             />
 
             <LandingStat
-              eyebrow="Folk sound"
-              title="Traditional instruments"
-              description="Madal, Sarangi and Bansuri controls built into the studio."
+              eyebrow="Lok dhun"
+              title="Traditional timbre"
+              description="Madal, Sarangi and Bansuri sit at the center of the arrangement."
             />
 
             <LandingStat
-              eyebrow="Vocals"
-              title="Choose the singer style"
-              description="Male, female, duet and Dohori-inspired vocal options."
+              eyebrow="Singing"
+              title="Choose the voice form"
+              description="Male, female, duet and Dohori-inspired performance styles."
             />
 
             <LandingStat
-              eyebrow="Library"
-              title="Your songs stay yours"
-              description="Private, account-based song history with playback and downloads."
+              eyebrow="Song diary"
+              title="Keep every composition"
+              description="A private archive for your tracks, lyrics, playback and downloads."
             />
           </div>
         </section>
@@ -3484,7 +3735,7 @@ export default function Home() {
                 uppercase
               "
             >
-              From idea to audio
+              From story seed to lok geet
             </p>
 
             <h2
@@ -3497,8 +3748,8 @@ export default function Home() {
                 sm:text-4xl
               "
             >
-              Create a folk song in three
-              focused steps.
+              Shape a Nepali folk song in
+              three guided steps.
             </h2>
 
             <p
@@ -3510,10 +3761,11 @@ export default function Home() {
                 sm:text-base
               "
             >
-              The AI handles generation while
-              you stay in control of the story,
-              lyrics, folk arrangement and final
-              vocal style.
+              The workflow is designed to feel
+              closer to a folk composition desk
+              than a generic prompt box — you keep
+              control of the story, lyrics, folk
+              arrangement and vocal character.
             </p>
           </div>
 
@@ -3527,22 +3779,22 @@ export default function Home() {
           >
             <LandingStep
               number="01"
-              title="Describe the story"
-              description="Start with the memory, place, relationship or experience you want your Nepali folk song to express."
-              detail="Theme · mood · duration"
+              title="Begin with the memory"
+              description="Start from the place, relationship, memory or lived experience that your song should carry."
+              detail="Story · mood · duration"
             />
 
             <LandingStep
               number="02"
-              title="Shape the lyrics"
-              description="Your fine-tuned Gemma model generates Nepali lyrics that you can review and edit before synthesis."
+              title="Refine the lyrics"
+              description="Your fine-tuned Gemma model drafts Nepali lyrics which you can review, polish and keep culturally grounded."
               detail="Gemma-3-4B · Nepali Lyrics LoRA"
             />
 
             <LandingStep
               number="03"
-              title="Create the music"
-              description="Choose traditional instruments and vocal style, then send the finished lyrics to ACE-Step for the complete track."
+              title="Compose the final dhun"
+              description="Choose instruments and singing style, then pass the finished lyrics into ACE-Step for the complete folk arrangement."
               detail="ACE-Step 1.5 · Nepali Folk LoRA"
             />
           </div>
@@ -3585,7 +3837,7 @@ export default function Home() {
                     uppercase
                   "
                 >
-                  Built around Nepali folk
+                  Designed around Nepali folk forms
                 </p>
 
                 <h2
@@ -3598,8 +3850,8 @@ export default function Home() {
                     sm:text-4xl
                   "
                 >
-                  More than a generic music
-                  generator.
+                  More than a generic
+                  AI music template.
                 </h2>
 
                 <p
@@ -3611,12 +3863,12 @@ export default function Home() {
                     text-neutral-500
                   "
                 >
-                  The experience is designed
-                  around your own fine-tuned
-                  Nepali lyric and folk-audio
-                  pipeline, with controls that
-                  match the cultural and musical
-                  scope of the project.
+                  The interface is shaped around
+                  Nepali lyrics, folk instruments,
+                  vocal traditions and your own
+                  model pipeline, so the experience
+                  feels culturally anchored rather
+                  than visually generic.
                 </p>
               </div>
 
@@ -3629,25 +3881,25 @@ export default function Home() {
               >
                 <LandingFeature
                   icon="◌"
-                  title="Mood-aware creation"
-                  description="Move between nostalgic, romantic, joyful and emotional folk directions."
+                  title="Folk mood direction"
+                  description="Move between nostalgic, romantic, joyful and emotional song directions."
                 />
 
                 <LandingFeature
                   icon="♫"
-                  title="Traditional arrangement"
+                  title="Traditional arrangement core"
                   description="Select Madal, Sarangi and Bansuri to guide the final musical texture."
                 />
 
                 <LandingFeature
                   icon="◎"
-                  title="Vocal direction"
-                  description="Request solo male, solo female, duet, same-gender duet, Dohori or automatic vocal style."
+                  title="Singer form"
+                  description="Request solo male, solo female, duet, same-gender duet, Dohori or automatic singing style."
                 />
 
                 <LandingFeature
                   icon="▤"
-                  title="Private song library"
+                  title="Personal song archive"
                   description="Every account has its own generated tracks, lyrics, downloads and saved metadata."
                 />
               </div>
@@ -3690,7 +3942,7 @@ export default function Home() {
                   uppercase
                 "
               >
-                Folk instruments
+                लोक बाजा · Folk instruments
               </p>
 
               <h3
@@ -3702,7 +3954,7 @@ export default function Home() {
                   text-white
                 "
               >
-                Shape the traditional sound.
+                Shape the sound around familiar folk timbres.
               </h3>
 
               <div
@@ -3714,19 +3966,19 @@ export default function Home() {
                 <LandingInstrument
                   name="Madal"
                   nepali="मादल"
-                  description="Rhythmic foundation for the folk arrangement."
+                  description="The pulse and rhythmic backbone for the arrangement."
                 />
 
                 <LandingInstrument
                   name="Sarangi"
                   nepali="सारङ्गी"
-                  description="Expressive bowed texture for melodic emotion."
+                  description="A lyrical bowed voice that carries memory and emotion."
                 />
 
                 <LandingInstrument
                   name="Bansuri"
                   nepali="बाँसुरी"
-                  description="Airy flute colour for melodic and pastoral character."
+                  description="A light flute texture with pastoral and melodic colour."
                 />
               </div>
             </div>
@@ -3749,7 +4001,7 @@ export default function Home() {
                   uppercase
                 "
               >
-                Vocal styles
+                लोक स्वर · Vocal styles
               </p>
 
               <h3
@@ -3761,7 +4013,7 @@ export default function Home() {
                   text-white
                 "
               >
-                Choose how the story is sung.
+                Choose how the story is voiced.
               </h3>
 
               <div
@@ -3821,10 +4073,7 @@ export default function Home() {
                   text-neutral-600
                 "
               >
-                Vocal choices condition the
-                generative model; final voice
-                characteristics can still vary
-                between generations.
+                Vocal settings guide the model toward a performance style, although exact voice colour can still vary between generations.
               </p>
             </div>
           </div>
@@ -3860,7 +4109,7 @@ export default function Home() {
                   uppercase
                 "
               >
-                Fine-tuned AI pipeline
+                Fine-tuned folk AI pipeline
               </p>
 
               <h2
@@ -3876,7 +4125,7 @@ export default function Home() {
                 "
               >
                 Two specialized models,
-                one continuous studio.
+                one continuous folk studio.
               </h2>
             </div>
 
@@ -3895,7 +4144,7 @@ export default function Home() {
                 eyebrow="Lyrics"
                 title="Gemma-3-4B"
                 subtitle="Nepali Lyrics LoRA"
-                description="Generates the Nepali lyric draft from your theme, mood, instruments and duration."
+                description="Generates a Nepali lyric draft from your story prompt, mood, instruments and duration."
               />
 
               <div
@@ -3914,7 +4163,7 @@ export default function Home() {
                 eyebrow="Music"
                 title="ACE-Step 1.5 Turbo"
                 subtitle="Nepali Folk LoRA"
-                description="Turns the reviewed lyrics and selected folk controls into the final WAV audio."
+                description="Transforms the reviewed lyrics and selected folk controls into the final WAV composition."
               />
             </div>
           </div>
@@ -3960,7 +4209,7 @@ export default function Home() {
                     uppercase
                   "
                 >
-                  Your personal studio
+                  Your growing song archive
                 </p>
 
                 <h2
@@ -3973,8 +4222,8 @@ export default function Home() {
                     sm:text-4xl
                   "
                 >
-                  Create today. Come back
-                  to it tomorrow.
+                  Create today. Return to
+                  your songs anytime.
                 </h2>
 
                 <p
@@ -3986,10 +4235,11 @@ export default function Home() {
                     text-neutral-500
                   "
                 >
-                  Each account has a private
-                  library, so generated songs,
-                  lyrics and audio remain tied
-                  to the user who created them.
+                  Every account keeps a private
+                  record of the lyrics and songs it
+                  creates, turning the studio into a
+                  personal archive of evolving folk
+                  ideas rather than one-off outputs.
                 </p>
 
                 <button
@@ -4017,7 +4267,7 @@ export default function Home() {
                     hover:bg-neutral-200
                   "
                 >
-                  Create your account
+                  Open your studio
                   <span>→</span>
                 </button>
               </div>
@@ -4740,7 +4990,7 @@ export default function Home() {
                       text-neutral-500
                     "
                   >
-                    Describe the story. Then shape the mood, folk instruments, singer setup, and song length.
+                    Begin with the memory. Then shape the mood, folk instruments, singer setup, and song length.
                   </p>
                 </div>
 
@@ -5321,7 +5571,7 @@ export default function Home() {
                           "
                         >
                           {theme.trim() ||
-                            "New Nepali folk song"}
+                            "Studio preview"}
                         </p>
                         <p
                           className="
@@ -5568,13 +5818,13 @@ export default function Home() {
                     "
                   >
                     <RecipeLine
-                      label="Mood"
+                      label="Mood · भाव"
                       value={
                         moodLabel(mood)
                       }
                     />
                     <RecipeLine
-                      label="Vocals"
+                      label="Vocals · स्वर"
                       value={
                         vocalLabel(
                           vocalStyle
@@ -5582,7 +5832,7 @@ export default function Home() {
                       }
                     />
                     <RecipeLine
-                      label="Length"
+                      label="Length · अवधि"
                       value={
                         formatDuration(
                           duration
@@ -5590,7 +5840,7 @@ export default function Home() {
                       }
                     />
                     <RecipeLine
-                      label="Instruments"
+                      label="Instruments · बाजा"
                       value={
                         instruments.length
                           ? instruments.join(
